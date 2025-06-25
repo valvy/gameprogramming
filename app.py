@@ -40,14 +40,24 @@ def admin():
 
     message = None
     if request.method == 'POST':
-        grid_size = int(request.form.get("grid_size", 50))
+        grid_size = int(request.form.get("grid_size", 20))
         pin = generate_unique_pin()
+        blocked_tiles = [
+            {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
+            for _ in range(grid_size // 2)
+        ]
+        while True:
+            goal = {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
+            if goal not in blocked_tiles:
+                break
+
         with lock:
             games[pin] = {
                 "grid_size": grid_size,
                 "players": {},
-                "goal": {"x": random.randint(0, grid_size-1), "y": random.randint(0, grid_size-1)},
-                "winner": None
+                "goal": goal,
+                "winner": None,
+                "blocked": blocked_tiles
             }
             game_queues[pin] = []
         message = f"Nieuwe game aangemaakt met PIN: {pin} (grid {grid_size}x{grid_size})"
@@ -162,6 +172,12 @@ def game_loop():
 
                     new_x = max(0, min(game["grid_size"]-1, player["x"] + dx))
                     new_y = max(0, min(game["grid_size"]-1, player["y"] + dy))
+
+                    # Check of doeltegel geblokkeerd is
+                    if {"x": new_x, "y": new_y} in game.get("blocked", []):
+                        player["last_move"] = None
+                        continue
+
                     player["x"], player["y"] = new_x, new_y
                     player["last_move"] = None
 

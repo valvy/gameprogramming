@@ -64,8 +64,16 @@
           ctx.stroke();
         }
 
+        // Geblokkeerde tegels
+        if (state.blocked) {
+          ctx.fillStyle = "black";
+          for (const b of state.blocked) {
+            ctx.fillRect(b.x * tileSize, b.y * tileSize, tileSize, tileSize);
+          }
+        }
+
         // Doel
-        ctx.fillStyle = "black";
+        ctx.fillStyle = "gray";
         ctx.fillRect(state.goal.x * tileSize, state.goal.y * tileSize, tileSize, tileSize);
 
         // Spelers
@@ -82,3 +90,4 @@
   </script>
 </body>
 </html>
+
