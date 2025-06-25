@@ -7,7 +7,7 @@
     .game-card {
       border: 1px solid #ccc;
       padding: 1em;
-      margin-bottom: 1em;
+      margin-bottom: 2em;
       border-radius: 8px;
     }
     canvas { border: 1px solid #000; margin-top: 1em; }
@@ -22,12 +22,19 @@
       <div class="game-card">
         <h2>Game PIN: {{ pin }}</h2>
         <p>Grid: {{ game.grid_size }} × {{ game.grid_size }}</p>
-        <p>Winnaar: {{ game.winner | default('nog niemand') }}</p>
+        <p>Winnaar (laatste tick): {{ game.winner | default('nog niemand') }}</p>
         <button onclick="showGame('{{ pin }}', {{ game.grid_size }})">Toon bord</button>
 
         <div id="canvas-{{ pin }}" class="hidden">
           <canvas id="gameCanvas-{{ pin }}" width="400" height="400"></canvas>
           <p id="winner-{{ pin }}"></p>
+
+          <h4>Leaderboard</h4>
+          <ol id="leaderboard-{{ pin }}">
+            {% for entry in leaderboards[pin] %}
+              <li>{{ entry.name }} - {{ entry.score }} punten</li>
+            {% endfor %}
+          </ol>
         </div>
       </div>
     {% endfor %}
@@ -35,59 +42,77 @@
     <p>Er zijn nog geen actieve games.</p>
   {% endif %}
 
-  <script>
-    function showGame(pin, gridSize) {
-      const container = document.getElementById(`canvas-${pin}`);
-      container.classList.remove("hidden");
+<script>
+  const sources = {};
 
-      const canvas = document.getElementById(`gameCanvas-${pin}`);
-      const ctx = canvas.getContext("2d");
-      const tileSize = canvas.width / gridSize;
-      const winnerElem = document.getElementById(`winner-${pin}`);
+  function showGame(pin, gridSize) {
+    const container = document.getElementById(`canvas-${pin}`);
+    container.classList.remove("hidden");
 
-      const source = new EventSource(`/stream/${pin}`);
-      source.onmessage = (event) => {
-        const state = JSON.parse(event.data);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const canvas = document.getElementById(`gameCanvas-${pin}`);
+    const ctx = canvas.getContext("2d");
+    const tileSize = canvas.width / gridSize;
+    const winnerElem = document.getElementById(`winner-${pin}`);
+    const leaderboardElem = document.getElementById(`leaderboard-${pin}`);
 
-        // Raster
-        ctx.strokeStyle = "#ccc";
-        for (let i = 0; i <= gridSize; i++) {
-          ctx.beginPath();
-          ctx.moveTo(i * tileSize, 0);
-          ctx.lineTo(i * tileSize, canvas.height);
-          ctx.stroke();
+    if (sources[pin]) return;
 
-          ctx.beginPath();
-          ctx.moveTo(0, i * tileSize);
-          ctx.lineTo(canvas.width, i * tileSize);
-          ctx.stroke();
-        }
+    const source = new EventSource(`/stream/${pin}`);
+    sources[pin] = source;
 
-        // Geblokkeerde tegels
-        if (state.blocked) {
-          ctx.fillStyle = "black";
-          for (const b of state.blocked) {
-            ctx.fillRect(b.x * tileSize, b.y * tileSize, tileSize, tileSize);
+    source.onmessage = function(event) {
+      const state = JSON.parse(event.data);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Raster
+      ctx.strokeStyle = "#ccc";
+      for (let i = 0; i <= gridSize; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * tileSize, 0);
+        ctx.lineTo(i * tileSize, canvas.height);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(0, i * tileSize);
+        ctx.lineTo(canvas.width, i * tileSize);
+        ctx.stroke();
+      }
+
+      // Blokkades
+      ctx.fillStyle = "black";
+      for (const b of state.blocked || []) {
+        ctx.fillRect(b.x * tileSize, b.y * tileSize, tileSize, tileSize);
+      }
+
+      // Doel
+      ctx.fillStyle = "gray";
+      ctx.fillRect(state.goal.x * tileSize, state.goal.y * tileSize, tileSize, tileSize);
+
+      // Spelers
+      for (const token in state.players) {
+        const p = state.players[token];
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x * tileSize, p.y * tileSize, tileSize, tileSize);
+      }
+
+      // Winnaar
+      winnerElem.textContent = state.winner ? `🎉 Laatste winnaar: ${state.winner}` : "";
+
+      // Leaderboard
+      if (state.scores) {
+        const scoredPlayers = [];
+        for (const token in state.scores) {
+          const player = state.players[token];
+          if (player) {
+            scoredPlayers.push({ name: player.name, score: state.scores[token] });
           }
         }
+        scoredPlayers.sort((a, b) => b.score - a.score);
+        leaderboardElem.innerHTML = scoredPlayers.map(p => `<li>${p.name} - ${p.score} punten</li>`).join("");
+      }
+    };
+  }
+</script>
 
-        // Doel
-        ctx.fillStyle = "gray";
-        ctx.fillRect(state.goal.x * tileSize, state.goal.y * tileSize, tileSize, tileSize);
-
-        // Spelers
-        for (const token in state.players) {
-          const p = state.players[token];
-          ctx.fillStyle = p.color;
-          ctx.fillRect(p.x * tileSize, p.y * tileSize, tileSize, tileSize);
-        }
-
-        // Winnaar
-        winnerElem.textContent = state.winner ? `🎉 Winnaar: ${state.winner}` : "Nog geen winnaar...";
-      };
-    }
-  </script>
 </body>
 </html>
-

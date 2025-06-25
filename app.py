@@ -31,7 +31,21 @@ lock = threading.Lock()
 
 @app.route('/')
 def index():
-    return render_template("index.html", games=games)
+    leaderboard_data = {}
+    with lock:
+        for pin, game in games.items():
+            leaderboard = []
+            for token, score in game.get("scores", {}).items():
+                player = game["players"].get(token)
+                if player:
+                    leaderboard.append({
+                        "name": player["name"],
+                        "score": score
+                    })
+            leaderboard.sort(key=lambda x: x["score"], reverse=True)
+            leaderboard_data[pin] = leaderboard
+
+    return render_template("index.html", games=games, leaderboards=leaderboard_data)
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
@@ -46,6 +60,7 @@ def admin():
             {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
             for _ in range(grid_size // 2)
         ]
+        # Kies een doel dat niet geblokkeerd is
         while True:
             goal = {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
             if goal not in blocked_tiles:
@@ -57,7 +72,8 @@ def admin():
                 "players": {},
                 "goal": goal,
                 "winner": None,
-                "blocked": blocked_tiles
+                "blocked": blocked_tiles,
+                "scores": {}  # token -> score
             }
             game_queues[pin] = []
         message = f"Nieuwe game aangemaakt met PIN: {pin} (grid {grid_size}x{grid_size})"
@@ -106,6 +122,7 @@ def register():
             "y": random.randint(0, games[pin]["grid_size"]-1),
             "last_move": None
         }
+        games[pin]["scores"][token] = 0
     return jsonify({"token": token})
 
 @app.route('/api/move', methods=['POST'])
@@ -158,8 +175,6 @@ def game_loop():
         time.sleep(TICK_INTERVAL)
         with lock:
             for pin, game in games.items():
-                if game["winner"]:
-                    continue
                 for token, player in game["players"].items():
                     move = player.get("last_move")
                     if not move:
@@ -173,7 +188,6 @@ def game_loop():
                     new_x = max(0, min(game["grid_size"]-1, player["x"] + dx))
                     new_y = max(0, min(game["grid_size"]-1, player["y"] + dy))
 
-                    # Check of doeltegel geblokkeerd is
                     if {"x": new_x, "y": new_y} in game.get("blocked", []):
                         player["last_move"] = None
                         continue
@@ -182,7 +196,15 @@ def game_loop():
                     player["last_move"] = None
 
                     if new_x == game["goal"]["x"] and new_y == game["goal"]["y"]:
-                        game["winner"] = player["name"]
+                        game["scores"][token] += 1000
+                        while True:
+                            new_goal = {
+                                "x": random.randint(0, game["grid_size"]-1),
+                                "y": random.randint(0, game["grid_size"]-1)
+                            }
+                            if new_goal not in game.get("blocked", []):
+                                game["goal"] = new_goal
+                                break
 
                 state_json = json.dumps(game)
                 for q in game_queues[pin]:
