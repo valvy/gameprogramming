@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Inloggen</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    input { margin-top: 1em; padding: 0.5em; }
+  </style>
+</head>
+<body>
+  <h1>Login</h1>
+  {% if error %}
+    <p style="color: red;">{{ error }}</p>
+  {% endif %}
+  <form method="POST">
+    <label>Wachtwoord:</label><br>
+    <input type="password" name="password" required><br>
+    <button type="submit">Log in</button>
+  </form>
+</body>
+</html>

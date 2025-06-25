@@ -1,18 +1,42 @@
-from flask import Flask, jsonify, request, render_template, Response
+from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session
+import bcrypt
+import os
 import threading
-import uuid
 import time
+import uuid
 import random
 import queue
 import json
+import sys
 
 app = Flask(__name__)
+app.secret_key = os.urandom(24)
+
+# ====================
+# Configuratie
+# ====================
 
 GRID_SIZE = 20
 TICK_INTERVAL = 1  # seconden
 
+# Omgevingsvariabele voor bcrypt hash van admin wachtwoord
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH")
+
+if not ADMIN_PASSWORD_HASH:
+    print("❌ FOUT: ADMIN_PASSWORD_HASH is niet ingesteld als omgevingsvariabele.")
+    print("Gebruik bijvoorbeeld:")
+    print("   python -c \"import bcrypt; print(bcrypt.hashpw(b'geheim', bcrypt.gensalt()).decode())\"")
+    print("en stel deze in via:")
+    print("   export ADMIN_PASSWORD_HASH='...'  (Linux/macOS)")
+    print("   set ADMIN_PASSWORD_HASH=...       (Windows)")
+    sys.exit(1)
+
+# ====================
+# Game State
+# ====================
+
 game_state = {
-    "players": {},  # token -> {"name", "color", "x", "y", "last_move"}
+    "players": {},
     "goal": {"x": random.randint(0, GRID_SIZE - 1), "y": random.randint(0, GRID_SIZE - 1)},
     "winner": None
 }
@@ -20,9 +44,43 @@ game_state = {
 client_queues = []
 lock = threading.Lock()
 
+# ====================
+# Routes: Frontend
+# ====================
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
+
+@app.route('/admin')
+def admin():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+    return "<h1>Welkom, admin!</h1><p><a href='/logout'>Uitloggen</a></p>"
+
+@app.route('/login', methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password", "").encode("utf-8")
+        hash_from_env = ADMIN_PASSWORD_HASH.encode("utf-8")
+
+        if bcrypt.checkpw(password, hash_from_env):
+            session["logged_in"] = True
+            return redirect(url_for("admin"))
+        else:
+            error = "Ongeldig wachtwoord"
+
+    return render_template("login.html", error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+# ====================
+# Routes: API voor studenten
+# ====================
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -61,6 +119,19 @@ def move():
 
     return jsonify({"status": "Beweging geregistreerd"})
 
+@app.route('/api/state')
+def state():
+    with lock:
+        return jsonify({
+            "players": game_state["players"],
+            "goal": game_state["goal"],
+            "winner": game_state["winner"]
+        })
+
+# ====================
+# Server-Sent Events (SSE)
+# ====================
+
 @app.route('/stream')
 def stream():
     def event_stream(q):
@@ -78,14 +149,9 @@ def stream():
         client_queues.append(q)
     return Response(event_stream(q), mimetype="text/event-stream")
 
-@app.route('/api/state')
-def state():
-    with lock:
-        return jsonify({
-            "players": game_state["players"],
-            "goal": game_state["goal"],
-            "winner": game_state["winner"]
-        })
+# ====================
+# Game Logic
+# ====================
 
 def game_loop():
     while True:
@@ -115,17 +181,22 @@ def game_loop():
                     game_state["winner"] = player["name"]
                     print(f"🏁 WINNAAR: {player['name']}")
 
-            state_json = json.dumps({
-                "players": game_state["players"],
-                "goal": game_state["goal"],
-                "winner": game_state["winner"]
-            })
+        # Verzenden van game state naar frontend
+        state_json = json.dumps({
+            "players": game_state["players"],
+            "goal": game_state["goal"],
+            "winner": game_state["winner"]
+        })
 
-            for q in client_queues[:]:
-                try:
-                    q.put_nowait(state_json)
-                except queue.Full:
-                    pass
+        for q in client_queues[:]:
+            try:
+                q.put_nowait(state_json)
+            except queue.Full:
+                pass
+
+# ====================
+# Start de app
+# ====================
 
 if __name__ == '__main__':
     threading.Thread(target=game_loop, daemon=True).start()
