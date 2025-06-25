@@ -29,6 +29,7 @@ lock = threading.Lock()
 
 # ----------------------- FRONTEND -----------------------
 
+
 @app.route('/')
 def index():
     leaderboard_data = {}
@@ -46,7 +47,6 @@ def index():
             leaderboard_data[pin] = leaderboard
 
     return render_template("index.html", games=games, leaderboards=leaderboard_data)
-
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if not session.get("logged_in"):
@@ -110,9 +110,27 @@ def register():
     if not name or not color or not pin:
         return jsonify({"error": "Naam, kleur en PIN zijn verplicht"}), 400
 
+    disallowed_colors = {"black", "yellow"}
+    all_used_colors = set(disallowed_colors)
+
     with lock:
         if pin not in games:
             return jsonify({"error": "Ongeldige PIN"}), 404
+
+        used_colors = {p["color"] for p in games[pin]["players"].values()}
+        all_used_colors.update(used_colors)
+
+        original_color = color
+        available_colors = [
+            c for c in ["red", "blue", "green", "orange", "purple", "pink", "cyan", "lime", "brown", "magenta", "teal"]
+            if c not in all_used_colors
+        ]
+
+        if color in all_used_colors:
+            if available_colors:
+                color = random.choice(available_colors)
+            else:
+                return jsonify({"error": "Geen kleuren meer beschikbaar"}), 400
 
         token = str(uuid.uuid4())
         games[pin]["players"][token] = {
@@ -123,8 +141,12 @@ def register():
             "last_move": None
         }
         games[pin]["scores"][token] = 0
-    return jsonify({"token": token})
 
+    response = {"token": token, "color": color}
+    if color != original_color:
+        response["notice"] = f"Kleur '{original_color}' was niet beschikbaar. Je hebt nu '{color}' gekregen."
+
+    return jsonify(response)
 @app.route('/api/move', methods=['POST'])
 def move():
     data = request.get_json()
@@ -132,15 +154,39 @@ def move():
     direction = data.get("direction")
     pin = data.get("pin")
 
+    if not token or not direction or not pin:
+        return jsonify({"error": "Token, direction en PIN zijn verplicht"}), 400
+
     with lock:
-        if pin not in games or token not in games[pin]["players"]:
-            return jsonify({"error": "Ongeldige sessie of PIN"}), 403
-        if direction not in {"up", "down", "left", "right"}:
+        game = games.get(pin)
+        if not game:
+            return jsonify({"error": "Game niet gevonden"}), 404
+
+        player = game["players"].get(token)
+        if not player:
+            return jsonify({"error": "Speler niet gevonden"}), 404
+
+        dx, dy = 0, 0
+        if direction == "up":
+            dy = -1
+        elif direction == "down":
+            dy = 1
+        elif direction == "left":
+            dx = -1
+        elif direction == "right":
+            dx = 1
+        else:
             return jsonify({"error": "Ongeldige richting"}), 400
 
-        games[pin]["players"][token]["last_move"] = direction
+        new_x = max(0, min(game["grid_size"] - 1, player["x"] + dx))
+        new_y = max(0, min(game["grid_size"] - 1, player["y"] + dy))
 
-    return jsonify({"status": "Beweging geregistreerd"})
+        if {"x": new_x, "y": new_y} in game.get("blocked", []):
+            return jsonify({"notice": "Je botste tegen een muur. Beweging ongeldig."}), 200
+
+        player["last_move"] = direction
+
+    return jsonify({"status": "OK"})
 
 @app.route('/api/state/<pin>')
 def state(pin):
