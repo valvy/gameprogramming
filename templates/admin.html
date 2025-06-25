@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin - Beheer Games</title>
+  <style>
+    body { font-family: sans-serif; padding: 2em; }
+    .game-list { margin-top: 2em; }
+    .game-card {
+      border: 1px solid #ccc;
+      padding: 1em;
+      margin-bottom: 1em;
+      border-radius: 8px;
+    }
+    form button {
+      padding: 0.5em 1em;
+      font-size: 1em;
+      margin-top: 1em;
+    }
+    .message {
+      background: #e0ffe0;
+      border: 1px solid #90ee90;
+      padding: 1em;
+      margin-top: 1em;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎮 Gamebeheer (Admin)</h1>
+
+  <form method="post">
+    <button type="submit">➕ Nieuwe game aanmaken</button>
+  </form>
+
+  {% if message %}
+    <div class="message">
+      {{ message }}
+    </div>
+  {% endif %}
+
+  <div class="game-list">
+    <h2>Actieve games</h2>
+    {% if games %}
+      {% for pin, game in games.items() %}
+        <div class="game-card">
+          <strong>PIN:</strong> {{ pin }}<br>
+          <strong>Winnaar:</strong> {{ game.winner if game.winner else "nog niemand" }}<br>
+          <strong>Spelers:</strong> {{ game.players|length }}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>Er zijn nog geen games actief.</p>
+    {% endif %}
+  </div>
+
+  <p><a href="/logout">Uitloggen</a></p>
+</body>
+</html>

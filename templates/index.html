@@ -1,17 +1,84 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Grid Game</title>
+  <title>Grid Games Overzicht</title>
   <style>
-    canvas { border: 1px solid black; }
-    body { font-family: sans-serif; }
-    #winner { font-weight: bold; margin-top: 10px; }
+    body { font-family: sans-serif; padding: 2em; }
+    .game-card {
+      border: 1px solid #ccc;
+      padding: 1em;
+      margin-bottom: 1em;
+      border-radius: 8px;
+    }
+    canvas { border: 1px solid #000; margin-top: 1em; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
-  <h1>Grid Game (alleen visualisatie)</h1>
-  <canvas id="gameCanvas" width="400" height="400"></canvas>
-  <p id="winner">Nog geen winnaar...</p>
-  <script src="/static/game.js"></script>
+  <h1>Actieve Grid Games</h1>
+
+  {% if games %}
+    {% for pin, game in games.items() %}
+      <div class="game-card">
+        <h2>Game PIN: {{ pin }}</h2>
+        <p>Grid: {{ game.grid_size }} × {{ game.grid_size }}</p>
+        <p>Winnaar: {{ game.winner | default('nog niemand') }}</p>
+        <button onclick="showGame('{{ pin }}', {{ game.grid_size }})">Toon bord</button>
+
+        <div id="canvas-{{ pin }}" class="hidden">
+          <canvas id="gameCanvas-{{ pin }}" width="400" height="400"></canvas>
+          <p id="winner-{{ pin }}"></p>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>Er zijn nog geen actieve games.</p>
+  {% endif %}
+
+  <script>
+    function showGame(pin, gridSize) {
+      const container = document.getElementById(`canvas-${pin}`);
+      container.classList.remove("hidden");
+
+      const canvas = document.getElementById(`gameCanvas-${pin}`);
+      const ctx = canvas.getContext("2d");
+      const tileSize = canvas.width / gridSize;
+      const winnerElem = document.getElementById(`winner-${pin}`);
+
+      const source = new EventSource(`/stream/${pin}`);
+      source.onmessage = (event) => {
+        const state = JSON.parse(event.data);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Raster
+        ctx.strokeStyle = "#ccc";
+        for (let i = 0; i <= gridSize; i++) {
+          ctx.beginPath();
+          ctx.moveTo(i * tileSize, 0);
+          ctx.lineTo(i * tileSize, canvas.height);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(0, i * tileSize);
+          ctx.lineTo(canvas.width, i * tileSize);
+          ctx.stroke();
+        }
+
+        // Doel
+        ctx.fillStyle = "black";
+        ctx.fillRect(state.goal.x * tileSize, state.goal.y * tileSize, tileSize, tileSize);
+
+        // Spelers
+        for (const token in state.players) {
+          const p = state.players[token];
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x * tileSize, p.y * tileSize, tileSize, tileSize);
+        }
+
+        // Winnaar
+        winnerElem.textContent = state.winner ? `🎉 Winnaar: ${state.winner}` : "Nog geen winnaar...";
+      };
+    }
+  </script>
 </body>
 </html>

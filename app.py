@@ -12,65 +12,59 @@ import sys
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# ====================
-# Configuratie
-# ====================
-
-GRID_SIZE = 20
-TICK_INTERVAL = 1  # seconden
-
-# Omgevingsvariabele voor bcrypt hash van admin wachtwoord
 ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH")
-
 if not ADMIN_PASSWORD_HASH:
-    print("❌ FOUT: ADMIN_PASSWORD_HASH is niet ingesteld als omgevingsvariabele.")
+    print("\n❌ FOUT: ADMIN_PASSWORD_HASH is niet ingesteld als omgevingsvariabele.")
     print("Gebruik bijvoorbeeld:")
-    print("   python -c \"import bcrypt; print(bcrypt.hashpw(b'geheim', bcrypt.gensalt()).decode())\"")
+    print("  python -c \"import bcrypt; print(bcrypt.hashpw(b'geheim', bcrypt.gensalt()).decode())\"")
     print("en stel deze in via:")
-    print("   export ADMIN_PASSWORD_HASH='...'  (Linux/macOS)")
-    print("   set ADMIN_PASSWORD_HASH=...       (Windows)")
+    print("  export ADMIN_PASSWORD_HASH='...' (Linux/macOS)")
+    print("  set ADMIN_PASSWORD_HASH=...       (Windows)")
     sys.exit(1)
 
-# ====================
-# Game State
-# ====================
-
-game_state = {
-    "players": {},
-    "goal": {"x": random.randint(0, GRID_SIZE - 1), "y": random.randint(0, GRID_SIZE - 1)},
-    "winner": None
-}
-
-client_queues = []
+TICK_INTERVAL = 1
+games = {}  # pin -> game_state
+game_queues = {}  # pin -> [queue.Queue()]
 lock = threading.Lock()
 
-# ====================
-# Routes: Frontend
-# ====================
+# ----------------------- FRONTEND -----------------------
 
 @app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template("index.html", games=games)
 
-@app.route('/admin')
+@app.route('/admin', methods=['GET', 'POST'])
 def admin():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
-    return "<h1>Welkom, admin!</h1><p><a href='/logout'>Uitloggen</a></p>"
+
+    message = None
+    if request.method == 'POST':
+        grid_size = int(request.form.get("grid_size", 50))
+        pin = generate_unique_pin()
+        with lock:
+            games[pin] = {
+                "grid_size": grid_size,
+                "players": {},
+                "goal": {"x": random.randint(0, grid_size-1), "y": random.randint(0, grid_size-1)},
+                "winner": None
+            }
+            game_queues[pin] = []
+        message = f"Nieuwe game aangemaakt met PIN: {pin} (grid {grid_size}x{grid_size})"
+
+    return render_template("admin.html", games=games, message=message)
 
 @app.route('/login', methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
-        password = request.form.get("password", "").encode("utf-8")
-        hash_from_env = ADMIN_PASSWORD_HASH.encode("utf-8")
-
-        if bcrypt.checkpw(password, hash_from_env):
-            session["logged_in"] = True
-            return redirect(url_for("admin"))
+        pw_input = request.form.get("password", "").encode("utf-8")
+        hash_bytes = ADMIN_PASSWORD_HASH.encode("utf-8")
+        if bcrypt.checkpw(pw_input, hash_bytes):
+            session['logged_in'] = True
+            return redirect(url_for('admin'))
         else:
             error = "Ongeldig wachtwoord"
-
     return render_template("login.html", error=error)
 
 @app.route('/logout')
@@ -78,26 +72,28 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# ====================
-# Routes: API voor studenten
-# ====================
+# ----------------------- API -----------------------
 
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
     name = data.get("name")
     color = data.get("color")
+    pin = data.get("pin")
 
-    if not name or not color:
-        return jsonify({"error": "Naam en kleur verplicht"}), 400
+    if not name or not color or not pin:
+        return jsonify({"error": "Naam, kleur en PIN zijn verplicht"}), 400
 
-    token = str(uuid.uuid4())
     with lock:
-        game_state["players"][token] = {
+        if pin not in games:
+            return jsonify({"error": "Ongeldige PIN"}), 404
+
+        token = str(uuid.uuid4())
+        games[pin]["players"][token] = {
             "name": name,
             "color": color,
-            "x": random.randint(0, GRID_SIZE - 1),
-            "y": random.randint(0, GRID_SIZE - 1),
+            "x": random.randint(0, games[pin]["grid_size"]-1),
+            "y": random.randint(0, games[pin]["grid_size"]-1),
             "last_move": None
         }
     return jsonify({"token": token})
@@ -107,33 +103,27 @@ def move():
     data = request.get_json()
     token = data.get("token")
     direction = data.get("direction")
-
-    if token not in game_state["players"]:
-        return jsonify({"error": "Ongeldige sessie"}), 403
-
-    if direction not in {"up", "down", "left", "right"}:
-        return jsonify({"error": "Ongeldige richting"}), 400
+    pin = data.get("pin")
 
     with lock:
-        game_state["players"][token]["last_move"] = direction
+        if pin not in games or token not in games[pin]["players"]:
+            return jsonify({"error": "Ongeldige sessie of PIN"}), 403
+        if direction not in {"up", "down", "left", "right"}:
+            return jsonify({"error": "Ongeldige richting"}), 400
+
+        games[pin]["players"][token]["last_move"] = direction
 
     return jsonify({"status": "Beweging geregistreerd"})
 
-@app.route('/api/state')
-def state():
+@app.route('/api/state/<pin>')
+def state(pin):
     with lock:
-        return jsonify({
-            "players": game_state["players"],
-            "goal": game_state["goal"],
-            "winner": game_state["winner"]
-        })
+        if pin not in games:
+            return jsonify({"error": "PIN niet gevonden"}), 404
+        return jsonify(games[pin])
 
-# ====================
-# Server-Sent Events (SSE)
-# ====================
-
-@app.route('/stream')
-def stream():
+@app.route('/stream/<pin>')
+def stream(pin):
     def event_stream(q):
         try:
             while True:
@@ -141,62 +131,57 @@ def stream():
                 yield f"data: {data}\n\n"
         except GeneratorExit:
             with lock:
-                if q in client_queues:
-                    client_queues.remove(q)
+                game_queues[pin].remove(q)
 
     q = queue.Queue()
     with lock:
-        client_queues.append(q)
+        if pin not in game_queues:
+            return "PIN niet gevonden", 404
+        game_queues[pin].append(q)
+
     return Response(event_stream(q), mimetype="text/event-stream")
 
-# ====================
-# Game Logic
-# ====================
+# ----------------------- GAME LOGICA -----------------------
 
 def game_loop():
     while True:
         time.sleep(TICK_INTERVAL)
         with lock:
-            if game_state["winner"]:
-                continue
-
-            for token, player in game_state["players"].items():
-                move = player.get("last_move")
-                if not move:
+            for pin, game in games.items():
+                if game["winner"]:
                     continue
+                for token, player in game["players"].items():
+                    move = player.get("last_move")
+                    if not move:
+                        continue
+                    dx, dy = 0, 0
+                    if move == "up": dy = -1
+                    elif move == "down": dy = 1
+                    elif move == "left": dx = -1
+                    elif move == "right": dx = 1
 
-                dx, dy = 0, 0
-                if move == "up": dy = -1
-                elif move == "down": dy = 1
-                elif move == "left": dx = -1
-                elif move == "right": dx = 1
+                    new_x = max(0, min(game["grid_size"]-1, player["x"] + dx))
+                    new_y = max(0, min(game["grid_size"]-1, player["y"] + dy))
+                    player["x"], player["y"] = new_x, new_y
+                    player["last_move"] = None
 
-                new_x = max(0, min(GRID_SIZE - 1, player["x"] + dx))
-                new_y = max(0, min(GRID_SIZE - 1, player["y"] + dy))
+                    if new_x == game["goal"]["x"] and new_y == game["goal"]["y"]:
+                        game["winner"] = player["name"]
 
-                player["x"], player["y"] = new_x, new_y
-                player["last_move"] = None
+                state_json = json.dumps(game)
+                for q in game_queues[pin]:
+                    try:
+                        q.put_nowait(state_json)
+                    except queue.Full:
+                        pass
 
-                if new_x == game_state["goal"]["x"] and new_y == game_state["goal"]["y"]:
-                    game_state["winner"] = player["name"]
-                    print(f"🏁 WINNAAR: {player['name']}")
+def generate_unique_pin():
+    while True:
+        pin = str(random.randint(1000, 9999))
+        if pin not in games:
+            return pin
 
-        # Verzenden van game state naar frontend
-        state_json = json.dumps({
-            "players": game_state["players"],
-            "goal": game_state["goal"],
-            "winner": game_state["winner"]
-        })
-
-        for q in client_queues[:]:
-            try:
-                q.put_nowait(state_json)
-            except queue.Full:
-                pass
-
-# ====================
-# Start de app
-# ====================
+# ----------------------- START -----------------------
 
 if __name__ == '__main__':
     threading.Thread(target=game_loop, daemon=True).start()
