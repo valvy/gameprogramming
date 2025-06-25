@@ -22,7 +22,7 @@ if not ADMIN_PASSWORD_HASH:
     print("  set ADMIN_PASSWORD_HASH=...       (Windows)")
     sys.exit(1)
 
-TICK_INTERVAL = 1
+TICK_INTERVAL = 0.1
 games = {}  # pin -> game_state
 game_queues = {}  # pin -> [queue.Queue()]
 lock = threading.Lock()
@@ -100,6 +100,7 @@ def logout():
 
 # ----------------------- API -----------------------
 
+
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -116,6 +117,10 @@ def register():
     with lock:
         if pin not in games:
             return jsonify({"error": "Ongeldige PIN"}), 404
+
+        # Check of naam al bestaat in deze game
+        if any(p["name"] == name for p in games[pin]["players"].values()):
+            return jsonify({"error": "Naam is al in gebruik in deze game"}), 400
 
         used_colors = {p["color"] for p in games[pin]["players"].values()}
         all_used_colors.update(used_colors)
@@ -147,6 +152,7 @@ def register():
         response["notice"] = f"Kleur '{original_color}' was niet beschikbaar. Je hebt nu '{color}' gekregen."
 
     return jsonify(response)
+
 @app.route('/api/move', methods=['POST'])
 def move():
     data = request.get_json()
@@ -189,11 +195,30 @@ def move():
     return jsonify({"status": "OK"})
 
 @app.route('/api/state/<pin>')
-def state(pin):
+def get_state(pin):
     with lock:
-        if pin not in games:
-            return jsonify({"error": "PIN niet gevonden"}), 404
-        return jsonify(games[pin])
+        game = games.get(pin)
+        if not game:
+            return jsonify({"error": "Game niet gevonden"}), 404
+
+        visible_players = [
+            {
+                "name": p["name"],
+                "color": p["color"],
+                "x": p["x"],
+                "y": p["y"]
+            }
+            for p in game["players"].values()
+        ]
+
+        return jsonify({
+            "players": {p["name"]: p for p in visible_players},
+            "goal": game["goal"],
+            "winner": game["winner"],
+            "scores": game.get("scores", {}),
+            "blocked": game.get("blocked", []),
+            "grid_size": game.get("grid_size", 20)
+        })
 
 @app.route('/stream/<pin>')
 def stream(pin):
