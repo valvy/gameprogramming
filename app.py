@@ -1,34 +1,20 @@
-from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session
-import bcrypt
-import os
+import json
+import queue
 import threading
 import time
 import uuid
 import random
-import queue
-import json
-import sys
+
+from flask import Flask, request, jsonify, render_template, Response, redirect, url_for, session
+from config import secret_key
+from models.GameModel import lock, games, game_queues, TICK_INTERVAL
+from routes.admin_route import admin_bp
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = secret_key
 
-ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH")
-if not ADMIN_PASSWORD_HASH:
-    print("\n❌ FOUT: ADMIN_PASSWORD_HASH is niet ingesteld als omgevingsvariabele.")
-    print("Gebruik bijvoorbeeld:")
-    print("  python -c \"import bcrypt; print(bcrypt.hashpw(b'geheim', bcrypt.gensalt()).decode())\"")
-    print("en stel deze in via:")
-    print("  export ADMIN_PASSWORD_HASH='...' (Linux/macOS)")
-    print("  set ADMIN_PASSWORD_HASH=...       (Windows)")
-    sys.exit(1)
 
-TICK_INTERVAL = 0.1
-games = {}  # pin -> game_state
-game_queues = {}  # pin -> [queue.Queue()]
-lock = threading.Lock()
-
-# ----------------------- FRONTEND -----------------------
-
+app.register_blueprint(admin_bp)
 
 @app.route('/')
 def index():
@@ -47,58 +33,6 @@ def index():
             leaderboard_data[pin] = leaderboard
 
     return render_template("index.html", games=games, leaderboards=leaderboard_data)
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
-    if not session.get("logged_in"):
-        return redirect(url_for("login"))
-
-    message = None
-    if request.method == 'POST':
-        grid_size = int(request.form.get("grid_size", 20))
-        pin = generate_unique_pin()
-        blocked_tiles = [
-            {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
-            for _ in range(grid_size // 2)
-        ]
-        # Kies een doel dat niet geblokkeerd is
-        while True:
-            goal = {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
-            if goal not in blocked_tiles:
-                break
-
-        with lock:
-            games[pin] = {
-                "grid_size": grid_size,
-                "players": {},
-                "goal": goal,
-                "winner": None,
-                "blocked": blocked_tiles,
-                "scores": {}  # token -> score
-            }
-            game_queues[pin] = []
-        message = f"Nieuwe game aangemaakt met PIN: {pin} (grid {grid_size}x{grid_size})"
-
-    return render_template("admin.html", games=games, message=message)
-
-@app.route('/login', methods=["GET", "POST"])
-def login():
-    error = None
-    if request.method == "POST":
-        pw_input = request.form.get("password", "").encode("utf-8")
-        hash_bytes = ADMIN_PASSWORD_HASH.encode("utf-8")
-        if bcrypt.checkpw(pw_input, hash_bytes):
-            session['logged_in'] = True
-            return redirect(url_for('admin'))
-        else:
-            error = "Ongeldig wachtwoord"
-    return render_template("login.html", error=error)
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-# ----------------------- API -----------------------
 
 
 @app.route('/api/register', methods=['POST'])
@@ -115,6 +49,7 @@ def register():
     all_used_colors = set(disallowed_colors)
 
     with lock:
+        print(games)
         if pin not in games:
             return jsonify({"error": "Ongeldige PIN"}), 404
 
@@ -284,11 +219,6 @@ def game_loop():
                     except queue.Full:
                         pass
 
-def generate_unique_pin():
-    while True:
-        pin = str(random.randint(1000, 9999))
-        if pin not in games:
-            return pin
 
 # ----------------------- START -----------------------
 
