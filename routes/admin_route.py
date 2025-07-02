@@ -3,15 +3,9 @@ import bcrypt
 from flask import Blueprint, redirect, url_for, session, request, render_template
 
 from config import ADMIN_PASSWORD_HASH
-from models.GameModel import lock, games, game_queues
+from models.GameModel import game_Model
 
 admin_bp = Blueprint('admin', __name__)
-
-def generate_unique_pin():
-    while True:
-        pin = str(random.randint(1000, 9999))
-        if pin not in games:
-            return pin
 
 @admin_bp.route('/admin', methods=['GET', 'POST'])
 def admin():
@@ -20,31 +14,12 @@ def admin():
 
     message = None
     if request.method == 'POST':
-        grid_size = int(request.form.get("grid_size", 20))
-        pin = generate_unique_pin()
-        blocked_tiles = [
-            {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
-            for _ in range(grid_size // 2)
-        ]
-        # Kies een doel dat niet geblokkeerd is
-        while True:
-            goal = {"x": random.randint(0, grid_size - 1), "y": random.randint(0, grid_size - 1)}
-            if goal not in blocked_tiles:
-                break
 
-        with lock:
-            games[pin] = {
-                "grid_size": grid_size,
-                "players": {},
-                "goal": goal,
-                "winner": None,
-                "blocked": blocked_tiles,
-                "scores": {}  # token -> score
-            }
-            game_queues[pin] = []
+        grid_size = int(request.form.get("grid_size", 20))
+        pin = game_Model.create_game(grid_size)
         message = f"Nieuwe game aangemaakt met PIN: {pin} (grid {grid_size}x{grid_size})"
 
-    return render_template("admin.html", games=games, message=message)
+    return render_template("admin.html", games=game_Model.games, message=message)
 
 
 @admin_bp.route('/login', methods=["GET", "POST"])

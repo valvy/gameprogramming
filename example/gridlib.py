@@ -31,6 +31,7 @@ def register(name, color, pin):
         exit(1)
 
     data = response.json()
+    print(data)
     token = data["token"]
     assigned_color = data.get("color", color)
     print(f"✅ Geregistreerd als {name}, kleur: {assigned_color}")
